@@ -20,7 +20,10 @@ from domainbed import hparams_registry
 from domainbed import algorithms
 from domainbed.lib import misc
 from domainbed.lib.fast_data_loader import InfiniteDataLoader, FastDataLoader
+<<<<<<< HEAD
 from domainbed.feature_checker import feature_extractor
+=======
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Domain generalization')
@@ -28,6 +31,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default="RotatedMNIST")
     parser.add_argument('--algorithm', type=str, default="ERM")
     parser.add_argument('--task', type=str, default="domain_generalization",
+<<<<<<< HEAD
                         help='domain_generalization | domain_adaptation')
     parser.add_argument('--hparams', type=str,
                         help='JSON-serialized hparams dict')
@@ -49,6 +53,29 @@ if __name__ == "__main__":
     parser.add_argument('--skip_model_save', action='store_true')
     parser.add_argument('--save_model_every_checkpoint', action='store_true')
     parser.add_argument('--extract_feature',type=str,default=None)  # 是否extract每个特征的分布
+=======
+        choices=["domain_generalization", "domain_adaptation"])
+    parser.add_argument('--hparams', type=str,
+        help='JSON-serialized hparams dict')
+    parser.add_argument('--hparams_seed', type=int, default=0,
+        help='Seed for random hparams (0 means "default hparams")')
+    parser.add_argument('--trial_seed', type=int, default=0,
+        help='Trial number (used for seeding split_dataset and '
+        'random_hparams).')
+    parser.add_argument('--seed', type=int, default=0,
+        help='Seed for everything else')
+    parser.add_argument('--steps', type=int, default=None,
+        help='Number of steps. Default is dataset-dependent.')
+    parser.add_argument('--checkpoint_freq', type=int, default=None,
+        help='Checkpoint every N steps. Default is dataset-dependent.')
+    parser.add_argument('--test_envs', type=int, nargs='+', default=[0])
+    parser.add_argument('--output_dir', type=str, default="train_output")
+    parser.add_argument('--holdout_fraction', type=float, default=0.2)
+    parser.add_argument('--uda_holdout_fraction', type=float, default=0,
+        help="For domain adaptation, % of test to use unlabeled for training.")
+    parser.add_argument('--skip_model_save', action='store_true')
+    parser.add_argument('--save_model_every_checkpoint', action='store_true')
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
     args = parser.parse_args()
 
     # If we ever want to implement checkpointing, just persist these values
@@ -56,9 +83,12 @@ if __name__ == "__main__":
     start_step = 0
     algorithm_dict = None
 
+<<<<<<< HEAD
     if args.extract_feature is not None:
         args.output_dir = args.output_dir + args.extract_feature if args.output_dir[-1] == "/" else args.output_dir + "/" + args.extract_feature
     
+=======
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
     os.makedirs(args.output_dir, exist_ok=True)
     sys.stdout = misc.Tee(os.path.join(args.output_dir, 'out.txt'))
     sys.stderr = misc.Tee(os.path.join(args.output_dir, 'err.txt'))
@@ -77,11 +107,18 @@ if __name__ == "__main__":
         print('\t{}: {}'.format(k, v))
 
     if args.hparams_seed == 0:
+<<<<<<< HEAD
         hparams = hparams_registry.default_hparams(
             args.algorithm, args.dataset)
     else:
         hparams = hparams_registry.random_hparams(args.algorithm, args.dataset,
                                                   misc.seed_hash(args.hparams_seed, args.trial_seed))
+=======
+        hparams = hparams_registry.default_hparams(args.algorithm, args.dataset)
+    else:
+        hparams = hparams_registry.random_hparams(args.algorithm, args.dataset,
+            misc.seed_hash(args.hparams_seed, args.trial_seed))
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
     if args.hparams:
         hparams.update(json.loads(args.hparams))
 
@@ -102,7 +139,11 @@ if __name__ == "__main__":
 
     if args.dataset in vars(datasets):
         dataset = vars(datasets)[args.dataset](args.data_dir,
+<<<<<<< HEAD
                                                args.test_envs, hparams)
+=======
+            args.test_envs, hparams)
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
     else:
         raise NotImplementedError
 
@@ -125,6 +166,7 @@ if __name__ == "__main__":
         uda = []
 
         out, in_ = misc.split_dataset(env,
+<<<<<<< HEAD
                                       int(len(env)*args.holdout_fraction),
                                       misc.seed_hash(args.trial_seed, env_i))
 
@@ -132,6 +174,15 @@ if __name__ == "__main__":
             uda, in_ = misc.split_dataset(in_,
                                           int(len(in_)*args.uda_holdout_fraction),
                                           misc.seed_hash(args.trial_seed, env_i))
+=======
+            int(len(env)*args.holdout_fraction),
+            misc.seed_hash(args.trial_seed, env_i))
+
+        if env_i in args.test_envs:
+            uda, in_ = misc.split_dataset(in_,
+                int(len(in_)*args.uda_holdout_fraction),
+                misc.seed_hash(args.trial_seed, env_i))
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
 
         if hparams['class_balanced']:
             in_weights = misc.make_weights_for_balanced_classes(in_)
@@ -145,6 +196,12 @@ if __name__ == "__main__":
         if len(uda):
             uda_splits.append((uda, uda_weights))
 
+<<<<<<< HEAD
+=======
+    if args.task == "domain_adaptation" and len(uda_splits) == 0:
+        raise ValueError("Not enough unlabeled samples for domain adaptation.")
+
+>>>>>>> 54c2f8c614a96067dee2d961f0b34575753c9df0
     train_loaders = [InfiniteDataLoader(
         dataset=env,
         weights=env_weights,
@@ -236,10 +293,7 @@ if __name__ == "__main__":
 
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
             for name, loader, weights in evals:
-                start = time.time()
-                loaderlen = len(loader)
                 acc = misc.accuracy(algorithm, loader, weights, device)
-                #print("eavl " + name + " with loader len " + str(loaderlen) + " use time " + str(round(time.time()-start,3)))
                 results[name+'_acc'] = acc
 
             results_keys = sorted(results.keys())

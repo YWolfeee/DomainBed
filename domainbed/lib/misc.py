@@ -9,12 +9,14 @@ import json
 import os
 import sys
 from shutil import copyfile
+from collections import OrderedDict
+from numbers import Number
+import operator
 
 import numpy as np
 import torch
 import tqdm
 from collections import Counter
-
 
 def make_weights_for_balanced_classes(dataset):
     counts = Counter()
@@ -36,13 +38,11 @@ def make_weights_for_balanced_classes(dataset):
 
     return weights
 
-
 def pdb():
     sys.stdout = sys.__stdout__
     import pdb
     print("Launching PDB, enter 'n' to step to parent function.")
     pdb.set_trace()
-
 
 def seed_hash(*args):
     """
@@ -51,10 +51,8 @@ def seed_hash(*args):
     args_str = str(args)
     return int(hashlib.md5(args_str.encode("utf-8")).hexdigest(), 16) % (2**31)
 
-
 def print_separator():
     print("="*80)
-
 
 def print_row(row, colwidth=10, latex=False):
     if latex:
@@ -68,23 +66,18 @@ def print_row(row, colwidth=10, latex=False):
         if np.issubdtype(type(x), np.floating):
             x = "{:.10f}".format(x)
         return str(x).ljust(colwidth)[:colwidth]
-    print(sep.join([format_val(x)+"," for x in row]), end_)
-
+    print(sep.join([format_val(x) for x in row]), end_)
 
 class _SplitDataset(torch.utils.data.Dataset):
     """Used by split_dataset"""
-
     def __init__(self, underlying_dataset, keys):
         super(_SplitDataset, self).__init__()
         self.underlying_dataset = underlying_dataset
         self.keys = keys
-
     def __getitem__(self, key):
         return self.underlying_dataset[self.keys[key]]
-
     def __len__(self):
         return len(self.keys)
-
 
 def split_dataset(dataset, n, seed=0):
     """
@@ -98,7 +91,6 @@ def split_dataset(dataset, n, seed=0):
     keys_1 = keys[:n]
     keys_2 = keys[n:]
     return _SplitDataset(dataset, keys_1), _SplitDataset(dataset, keys_2)
-
 
 def random_pairs_of_minibatches(minibatches):
     perm = torch.randperm(len(minibatches)).tolist()
@@ -115,7 +107,6 @@ def random_pairs_of_minibatches(minibatches):
         pairs.append(((xi[:min_n], yi[:min_n]), (xj[:min_n], yj[:min_n])))
 
     return pairs
-
 
 def accuracy(network, loader, weights, device):
     correct = 0
@@ -212,3 +203,39 @@ class Tee:
     def flush(self):
         self.stdout.flush()
         self.file.flush()
+
+class ParamDict(OrderedDict):
+    """Code adapted from https://github.com/Alok/rl_implementations/tree/master/reptile.
+    A dictionary where the values are Tensors, meant to represent weights of
+    a model. This subclass lets you perform arithmetic on weights directly."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, *kwargs)
+
+    def _prototype(self, other, op):
+        if isinstance(other, Number):
+            return ParamDict({k: op(v, other) for k, v in self.items()})
+        elif isinstance(other, dict):
+            return ParamDict({k: op(self[k], other[k]) for k in self})
+        else:
+            raise NotImplementedError
+
+    def __add__(self, other):
+        return self._prototype(other, operator.add)
+
+    def __rmul__(self, other):
+        return self._prototype(other, operator.mul)
+
+    __mul__ = __rmul__
+
+    def __neg__(self):
+        return ParamDict({k: -v for k, v in self.items()})
+
+    def __rsub__(self, other):
+        # a- b := a + (-b)
+        return self.__add__(other.__neg__())
+
+    __sub__ = __rsub__
+
+    def __truediv__(self, other):
+        return self._prototype(other, operator.truediv)

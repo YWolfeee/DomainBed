@@ -2,27 +2,29 @@ from scipy.stats import ks_2samp
 import numpy as np
 import os
 import matplotlib.pyplot as plt
+import matplotlib
 import matplotlib.cm as cm
 import torch as torch
 import torch.nn as nn
 from gpu_kde import Dis_Calculation
 import time
 import argparse
-
+matplotlib.use('AGG')
 parser = argparse.ArgumentParser(description='Domain generalization')
 parser.add_argument('--dir', type=str, required=True)
-parser.add_argument('--sample_size',type=int,default=100000)
+parser.add_argument('--sample_size', type=int, default=100000)
 parser.add_argument('--show', action="store_true")
 parser.add_argument('--device', choices=['cpu', 'cuda'], default='cuda')
 args = parser.parse_args()
-
 
 has_extract_infor = False
 save_some_image = False
 info_threshold = 0.0
 var_threshold = 0.4
-#marker_lis = ["029_0.15_rex","029_0.15_pen1","559_0.15_pen1"]
+# marker_lis = ["029_0.15_rex","029_0.15_pen1","559_0.15_pen1"]
 marker_lis = args.dir.split(",")
+
+print('start plot:',str(marker_lis))
 if len(marker_lis) > 1:
     assert save_some_image == False
 
@@ -30,8 +32,8 @@ if len(marker_lis) > 1:
 
 env_list = ['env0', 'env1', 'env2', 'env3']
 test_env = ['env1']
-#env_list = ['env0','env1','env2']
-#test_env = ['env2']
+# env_list = ['env0','env1','env2']
+# test_env = ['env2']
 train_env = [env for env in env_list if env not in test_env]
 # 设定label
 num_classes = 65
@@ -41,11 +43,11 @@ num_classes = 65
 
 def distribution_distance(data, method="ks_distance", range_lis=None):
     if method == "ks_distance":
-        #assert len(data) == 2, "KS distance is available only for two distribution!"
+        # assert len(data) == 2, "KS distance is available only for two distribution!"
         raw_list = {}
         for indexi in range(len(range_lis)):
             for indexj in range(indexi + 1, len(range_lis)):
-                raw_list[str(range_lis[indexi])+","+str(range_lis[indexj])
+                raw_list[str(range_lis[indexi]) + "," + str(range_lis[indexj])
                          ] = ks_2samp(data[indexi], data[indexj]).statistic
         return max([value for value in raw_list.values()]), raw_list
         # return ks_2samp(data[0], data[1]).statistic
@@ -56,7 +58,7 @@ def distribution_distance(data, method="ks_distance", range_lis=None):
         meaner = [np.average(w) for w in data]
         for indexi in range(len(range_lis)):
             for indexj in range(indexi + 1, len(range_lis)):
-                raw_list[str(range_lis[indexi])+","+str(range_lis[indexj])
+                raw_list[str(range_lis[indexi]) + "," + str(range_lis[indexj])
                          ] = abs(meaner[indexi] - meaner[indexj])
         return max([value for value in raw_list.values()]), raw_list
     else:
@@ -69,7 +71,7 @@ def shape_to_matrix(feature_num, env_num, label_num, max_data, data_len, data, d
     for env in range(env_num):
         for label in range(label_num):
             matrix[env][label][0:data_len[env, label]
-                               ] = data[label][env_list[env]]
+            ] = data[label][env_list[env]]
     return torch.from_numpy(matrix).to(device)
 
 
@@ -80,9 +82,9 @@ class opt_kde(torch.nn.Module):
         self.max_sample = matrix.shape[2]
         assert matrix.shape[0] == len(
             env_list), "length of envs in data does match provided envs"
-        self.bandwidth = self.max_sample ** (-1./(1+4))
+        self.bandwidth = self.max_sample ** (-1. / (1 + 4))
         self.offset = torch.exp(
-            torch.tensor(-0.5 / (self.bandwidth**2))).to(device)
+            torch.tensor(-0.5 / (self.bandwidth ** 2))).to(device)
         self.sample_size = sample_size
         self.device = device
 
@@ -107,7 +109,7 @@ class opt_kde(torch.nn.Module):
         delta = (right - left) / self.sample_size
         x_gird = torch.linspace(left, right, self.sample_size).to(self.device)
         divisor = torch.tensor(
-            np.sqrt(2*np.pi) * self.bandwidth, dtype=torch.float32).to(self.device)
+            np.sqrt(2 * np.pi) * self.bandwidth, dtype=torch.float32).to(self.device)
         store_dis = torch.zeros(
             (self.envs_num * self.envs_num, self.label_num, self.feature_num)).to(self.device)
         if cal_info:
@@ -131,10 +133,10 @@ class opt_kde(torch.nn.Module):
             if batch % timing == 0:
                 start = time.time()
             points = x_gird[batch *
-                            self.batch_len:min((batch+1)*self.batch_len, self.sample_size)].reshape((1, -1))
-            reducer = (torch.sum(torch.pow(self.offset, (matrix - points)**2), dim=2) -
+                            self.batch_len:min((batch + 1) * self.batch_len, self.sample_size)].reshape((1, -1))
+            reducer = (torch.sum(torch.pow(self.offset, (matrix - points) ** 2), dim=2) -
                        ((reduce_zeros - len_unsqueeze) *
-                        torch.pow(self.offset, points**2)).unsqueeze(dim=2)
+                        torch.pow(self.offset, points ** 2)).unsqueeze(dim=2)
                        ) / len_unsqueeze.unsqueeze(dim=3)
 
             dis_expand = reducer.expand(
@@ -148,13 +150,13 @@ class opt_kde(torch.nn.Module):
                 store_info += torch.sum(torch.abs(info_expand - info_expand.permute(1, 0, 2, 3, 4)), dim=-1).reshape(
                     (-1, self.envs_num, self.feature_num)) / divisor
 
-            #index = 0
+            # index = 0
             # for envi in range(self.envs_num):
             #    for envj in range(envi+1, self.envs_num):
             #        store_dis[index, :, :] += torch.abs(
             #            (reducer[envi] - reducer[envj])).sum(dim=-1) / divisor
             #        index += 1
-            #index = 0
+            # index = 0
             # if cal_info:
             #    for labeli in range(self.label_num):
             #        for labelj in range(labeli + 1, self.label_num):
@@ -163,11 +165,11 @@ class opt_kde(torch.nn.Module):
             #            )
             if batch % timing == timing - 1:
                 print("epoch %d, avg time: %f" %
-                      ((batch+1)*self.batch_len, (time.time()-start)/timing/self.batch_len))
-                #print("pure cal:" + str(cal_time / timing/self.batch_len))
+                      ((batch + 1) * self.batch_len, (time.time() - start) / timing / self.batch_len))
+                # print("pure cal:" + str(cal_time / timing/self.batch_len))
 
-        test_results = (store_dis*delta/2).max(dim=0)[0]
-        train_results = (store_dis[train_index] * delta/2).max(dim=0)[0]
+        test_results = (store_dis * delta / 2).max(dim=0)[0]
+        train_results = (store_dis[train_index] * delta / 2).max(dim=0)[0]
         print("finish forward once.")
         if cal_info:
             train_info = (store_info * delta / 2).max(dim=0)[0]
@@ -184,28 +186,32 @@ class opt_kde(torch.nn.Module):
 
 
 # Plot the s function
-plt.figure()
+
 for marker in marker_lis:
+    fig = plt.figure(figsize=(36,20))
     print("start extracting [" + marker + "]")
-    #marker = "029_0.15_rex"
+    # marker = "029_0.15_rex"
     method = "L1"
 
     # 处理文件
-    npy_file_path = "./"+marker + "/"
+    npy_file_path = "./" + marker + "/"
     file_list = [file_name for file_name in os.listdir(
         npy_file_path) if ".npy" in file_name]
 
+
     def get_file_name(name, label):
         for file in file_list:
-            if name in file and "label"+str(label) in file:
+            if name in file and "label" + str(label) in file:
                 return file
         raise EnvironmentError
+
 
     def has_test_env(s):
         for env in test_env:
             if env in s:
                 return True
         return False
+
 
     # data = label x env x samples x feature
     data = [{
@@ -224,16 +230,18 @@ for marker in marker_lis:
         for i in range(len(env_list)):
             for j in range(num_classes):
                 data_length[i][j] = data[j][env_list[i]].shape[0]
-        big_matrix = shape_to_matrix(feature_num=feature_num, env_num=len(env_list), label_num=num_classes, max_data=int(
-            max([max(w) for w in data_length])), data_len=data_length, data=data, device=args.device)
+        big_matrix = shape_to_matrix(feature_num=feature_num, env_num=len(env_list), label_num=num_classes,
+                                     max_data=int(
+                                         max([max(w) for w in data_length])), data_len=data_length, data=data,
+                                     device=args.device)
 
-        optimizer = opt_kde(big_matrix, data_length,args.sample_size)
+        optimizer = opt_kde(big_matrix, data_length, args.sample_size)
 
         steps = 0
         debug_new_method = True
         compute_result = optimizer.forward(cal_info=debug_new_method)
         compute_result = {
-            key:compute_result[key].cpu().numpy()
+            key: compute_result[key].cpu().numpy()
             for key in compute_result.keys()
         }
         train_distance = compute_result['train_results']
@@ -241,16 +249,17 @@ for marker in marker_lis:
         if debug_new_method:
             train_info = compute_result['train_info']
             plt.scatter(np.max(train_distance, axis=0), np.max(test_distance, axis=0),
-                        c=np.min(train_info, axis=0), s=[1 + 100 * w for w in np.average(train_info,axis=0)])
+                        c=np.min(train_info, axis=0), s=[1 + 100 * w for w in np.average(train_info, axis=0)])
         else:
             plt.scatter(np.max(train_distance, axis=0),
                         np.max(test_distance, axis=0))
         plt.xlim(-0.005, 1.005)
         plt.ylim(-0.005, 1.005)
-        plt.savefig(npy_file_path+"new_"+method+"_"+marker)
+        plt.savefig(npy_file_path + "new_" + method + "_" + marker)
         new_for_save = np.array(compute_result)
-        np.save(npy_file_path+"new_"+method+"_"+marker+"_save.npy", new_for_save)
-        exit()
+        np.save(npy_file_path + "new_" + method + "_" + marker + "_save.npy", new_for_save)
+        plt.close(fig)
+        continue
 
         for index in range(feature_num):
             # 对每一个特征
@@ -261,17 +270,17 @@ for marker in marker_lis:
 
             # 计算distinguishable, 每组label对(i,j)在环境env上的difference，并返回最小的
             for i in range(num_classes):
-                for j in range(i+1, num_classes):
+                for j in range(i + 1, num_classes):
                     # label (i,j)
                     feature[-1]['information_all'][str(i) + ',' + str(j)] = 1.0
                     feature[-1]['information_test'][str(i) +
                                                     ',' + str(j)] = 1.0
 
-            for env in env_list:   # 对所有集合计算
+            for env in env_list:  # 对所有集合计算
                 _, distance = distribution_distance([data[i][env][:, index] for i in range(
                     num_classes)], method=method, range_lis=list(range(num_classes)))
 
-                if env in train_env:    # 只对training计算information_max
+                if env in train_env:  # 只对training计算information_max
                     for key in feature[-1]['information_all']:
                         feature[-1]['information_all'][key] = min(
                             feature[-1]['information_all'][key], distance[key])
@@ -282,7 +291,7 @@ for marker in marker_lis:
 
             # 计算这个特征的overall可区分性
             feature[-1]['max_info'] = max([value for value in feature[-1]
-                                           ['information_all'].values()])
+            ['information_all'].values()])
 
             # 下面计算在train和all上的distance
             feature[-1]['invariance_all'] = []
@@ -303,7 +312,7 @@ for marker in marker_lis:
                 for i in range(len(env_list)):
                     for j in range(i+1, len(env_list)):
                         envi, envj = env_list[i], env_list[j]
-                        
+
                         # 计算在label上环境envi,envj之间的distance
                         distance = distribution_distance(
                             data[label][envi][:, index], data[label][envj][:, index])
@@ -320,19 +329,21 @@ for marker in marker_lis:
                   str(round(time.time() - start, 2)))
 
         for_save = np.array(feature)
-        np.save(npy_file_path+marker+"feature_information_all.npy", for_save)
-    else:   # 直接load feature
+        np.save(npy_file_path + marker + "feature_information_all.npy", for_save)
+    else:  # 直接load feature
         feature = np.load(file=npy_file_path + marker +
-                          "feature_information_all.npy", allow_pickle=True)
+                               "feature_information_all.npy", allow_pickle=True)
+
 
     def get_row(lis):
-        return ",".join([str(w) for w in lis])+"\n"
+        return ",".join([str(w) for w in lis]) + "\n"
 
-    writer = open(npy_file_path+marker+"key_message_all.txt", mode='w')
+
+    writer = open(npy_file_path + marker + "key_message_all.txt", mode='w')
     header = ["index", 'max_info', 'test_max']
     for label in range(num_classes):
-        header.append("l"+str(label)+"_train_var")
-        header.append("l"+str(label)+"_all_var")
+        header.append("l" + str(label) + "_train_var")
+        header.append("l" + str(label) + "_all_var")
     writer.write(get_row(header))
     for index in range(len(feature)):
         line = [index]
@@ -362,17 +373,18 @@ for marker in marker_lis:
     test_info = [np.mean(list(w['information_test'].values()))
                  for w in filter_feature]
 
-    invariant_rate = [(b-a)/a for (a, b)
+    invariant_rate = [(b - a) / a for (a, b)
                       in zip(training_variance, all_variance)]
-    info_rate = [(b-a)/a for (a, b) in zip(info, test_info)]
+    info_rate = [(b - a) / a for (a, b) in zip(info, test_info)]
 
     # plt.scatter(invariant_rate,info_rate, c = training_variance, s = [
     #    1 + 100 * w for w in info
     # ])
     plt.scatter(training_variance, all_variance, s=[
-                1 + 100 * w for w in info], c=test_info)
+        1 + 100 * w for w in info], c=test_info)
 
-#plt.vlines(var_threshold, 0, 1, colors="r", linestyles="dashed")
+'''
+# plt.vlines(var_threshold, 0, 1, colors="r", linestyles="dashed")
 plt.title("S Function with info_threshold[%.3f] and var_threshold[%.3f]" % (
     info_threshold, var_threshold))
 plt.xlim(left=-0.005)
@@ -380,19 +392,21 @@ plt.ylim(bottom=-0.05)
 if args.show:
     plt.show()
 else:
-    plt.savefig(npy_file_path+marker+method+".png")
+    plt.savefig(npy_file_path + marker + method + ".png")
 feature_num = [index for index in range(len(feature)) if (feature[index]['max_info']
-                                                          > info_threshold and max(feature[index]['train_var']) < var_threshold)]
+                                                          > info_threshold and max(
+            feature[index]['train_var']) < var_threshold)]
+'''
 if save_some_image:
-    #feature_num = [84, 56, 54, 23, 83]
-    #feature_num = [0,1,2,3,4]
+    # feature_num = [84, 56, 54, 23, 83]
+    # feature_num = [0,1,2,3,4]
     # while(True):
     #    temp = input()
     #    if temp == "c":
     #        break
     #    feature_num.append(int(temp))
-    if not os.path.exists(npy_file_path+"feature_image/"):
-        os.mkdir(npy_file_path+"feature_image/")
+    if not os.path.exists(npy_file_path + "feature_image/"):
+        os.mkdir(npy_file_path + "feature_image/")
     print("———— strat creating images ————")
     for num in feature_num:
         plt.figure(figsize=(18, 10))
@@ -407,15 +421,15 @@ if save_some_image:
             feature_set = data[label_index][env][:, num]
             color = 5 * i
             plt.hist(feature_set, bins='auto', density=True, color=color_set[color],
-                     alpha=1, label="label"+str(label_index)+"_" + env, histtype='step', linewidth=5)
+                     alpha=1, label="label" + str(label_index) + "_" + env, histtype='step', linewidth=5)
         # plt.savefig("feature_imgae/feature"+str(num)+"_label"+str(label)+"_" +
         #                env+".png")
         plt.legend(fontsize=15)
-        plt.title('Feature'+str(num)+",disting:"+str(round(feature[num]['max_info'], 3))+"\n"
+        plt.title('Feature' + str(num) + ",disting:" + str(round(feature[num]['max_info'], 3)) + "\n"
                   + "mean_var_in_train:" +
                   str(round(max(feature[num]['train_var']), 4))
-                  + ";mean_var_in_all:"+str(round(max(feature[num]['all_var']), 4)), fontsize=20)
-        plt.savefig(npy_file_path+"feature_image/feature" +
-                    str(num)+".png", dpi=100)
+                  + ";mean_var_in_all:" + str(round(max(feature[num]['all_var']), 4)), fontsize=20)
+        plt.savefig(npy_file_path + "feature_image/feature" +
+                    str(num) + ".png", dpi=100)
         plt.close()
     print("———— end creating images ————")

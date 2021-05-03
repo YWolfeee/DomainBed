@@ -259,7 +259,7 @@ for marker in marker_lis:
         print('saved')
         new_for_save = np.array(compute_result)
         np.save(npy_file_path + "new_" + method + "_" + marker + "_save.npy", new_for_save)
-        plt.close('all')
+        plt.close()
         continue
 
         for index in range(feature_num):

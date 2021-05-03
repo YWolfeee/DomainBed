@@ -9,7 +9,7 @@ import torch.nn as nn
 from gpu_kde import Dis_Calculation
 import time
 import argparse
-matplotlib.use('AGG')
+#matplotlib.use('AGG')
 parser = argparse.ArgumentParser(description='Domain generalization')
 parser.add_argument('--dir', type=str, required=True)
 parser.add_argument('--sample_size', type=int, default=100000)
@@ -188,7 +188,7 @@ class opt_kde(torch.nn.Module):
 # Plot the s function
 
 for marker in marker_lis:
-    fig = plt.figure(figsize=(36,20))
+    plt.figure(figsize=(36, 20))
     print("start extracting [" + marker + "]")
     # marker = "029_0.15_rex"
     method = "L1"
@@ -256,9 +256,10 @@ for marker in marker_lis:
         plt.xlim(-0.005, 1.005)
         plt.ylim(-0.005, 1.005)
         plt.savefig(npy_file_path + "new_" + method + "_" + marker)
+        print('saved')
         new_for_save = np.array(compute_result)
         np.save(npy_file_path + "new_" + method + "_" + marker + "_save.npy", new_for_save)
-        plt.close(fig)
+        plt.close('all')
         continue
 
         for index in range(feature_num):

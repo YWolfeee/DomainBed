@@ -172,7 +172,9 @@ class opt_kde(torch.nn.Module):
         train_results = (store_dis[train_index] * delta / 2).max(dim=0)[0]
         print("finish forward once.")
         if cal_info:
-            train_info = (store_info * delta / 2).max(dim=0)[0]
+            # should consider min env s.t. this to feature is exhibit, and select the biggest label pair
+            #train_info = (store_info * delta / 2).max(dim=0)[0]
+            train_info = (store_info * delta / 2).min(dim=1)[0].max(dim=0)[0].reshape((1,-1)) # return a (1, feature_num) dimension
             return {
                 "train_results": train_results,
                 "test_results": test_results,
@@ -249,7 +251,7 @@ for marker in marker_lis:
         if debug_new_method:
             train_info = compute_result['train_info']
             plt.scatter(np.max(train_distance, axis=0), np.max(test_distance, axis=0),
-                        c=np.min(train_info, axis=0), s=[1 + 100 * w for w in np.average(train_info, axis=0)])
+                        c=train_info.reshape((-1)), s=[1 + 100 * w for w in np.average(train_info, axis=0)])
         else:
             plt.scatter(np.max(train_distance, axis=0),
                         np.max(test_distance, axis=0))
@@ -339,6 +341,7 @@ for marker in marker_lis:
     def get_row(lis):
         return ",".join([str(w) for w in lis]) + "\n"
 
+    exit()
 
     writer = open(npy_file_path + marker + "key_message_all.txt", mode='w')
     header = ["index", 'max_info', 'test_max']

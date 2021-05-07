@@ -6,10 +6,10 @@ import matplotlib
 import matplotlib.cm as cm
 import torch as torch
 import torch.nn as nn
-from gpu_kde import Dis_Calculation
+#from gpu_kde import Dis_Calculation
 import time
 import argparse
-from matrix_optimizer import opt_kde
+from matrix_optimizer_new import opt_kde
 # matplotlib.use('AGG')
 parser = argparse.ArgumentParser(description='Domain generalization')
 parser.add_argument('--dir', type=str, required=True,
@@ -29,6 +29,7 @@ parser.add_argument('--add_info_plot', type=bool, default=True, help="whether to
 parser.add_argument('--plot_method', type=str, default='L1', help="using what method to calculate the distance of two distributions")
 parser.add_argument('--backward_method', type=str, default='mean',help="using what metrix to train the matrix")
 parser.add_argument('--concentrate_image',type=str,default=None,help="input a dir, where you want all images to be saved here")
+parser.add_argument('--batch_len',type=int,default=8)
 args = parser.parse_args()
 
 marker_lis = args.dir.split(",")
@@ -69,7 +70,9 @@ def distribution_distance(data, method="ks_distance", range_lis=None):
         return max([value for value in raw_list.values()]), raw_list
         # return ks_2samp(data[0], data[1]).statistic
     elif method == "L1":
-        return Dis_Calculation(data=data, method='L1', sample_cplx=10000, device='cuda', range_lis=range_lis)
+        raise NotImplementedError
+        
+        #return Dis_Calculation(data=data, method='L1', sample_cplx=10000, device='cuda', range_lis=range_lis)
     elif method == "mean":
         raw_list = {}
         meaner = [np.average(w) for w in data]

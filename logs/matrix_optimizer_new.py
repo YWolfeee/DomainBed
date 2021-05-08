@@ -29,6 +29,7 @@ class opt_kde(torch.nn.Module):
         self.envs = env_list
         self.train_env = train_env
         self.envs_num = len(self.envs)
+        self.train_env_index = [i for i in range(self.envs_num) if env_list[i] in self.train_env]
 
         # 准备初始化数据
         data_len = np.zeros(
@@ -109,10 +110,21 @@ class opt_kde(torch.nn.Module):
 
         index = 0
         train_index = []
+        test_index = []
         for envi in range(self.envs_num):
             for envj in range(self.envs_num):
-                if self.envs[envi] in self.train_env and self.envs[envj] in self.train_env:
+                if self.envs[envi] in self.train_env and self.envs[envj] in self.train_env and envi < envj:
                     train_index.append(index)
+                if envi < envj:
+                    test_index.append(index)
+                index += 1
+
+        index = 0
+        info_index = []
+        for labeli in range(self.label_num):
+            for labelj in range(self.label_num):
+                if labeli < labelj:
+                    info_index.append(index)
                 index += 1
 
         timing = 1000 // self.batch_len
@@ -154,7 +166,7 @@ class opt_kde(torch.nn.Module):
                       ((batch + 1) * self.batch_len, (time.time() - start) / timing / self.batch_len))
                 # print("pure cal:" + str(cal_time / timing/self.batch_len))
 
-        test_results = (store_dis * delta / 2).max(dim=0)[0]
+        test_results = (store_dis[test_index] * delta / 2).max(dim=0)[0]
         train_results = (store_dis[train_index] * delta / 2).max(dim=0)[0]
         if verbose:
             print("finish forward once.")
@@ -167,21 +179,23 @@ class opt_kde(torch.nn.Module):
             # should consider min env s.t. this to feature is exhibit, and select the biggest label pair
             #train_info = (store_info * delta / 2).max(dim=0)[0]
             # return a (1, feature_num) dimension
-            train_info = (store_info * delta /
-                          2).min(dim=1)[0].max(dim=0)[0].reshape((1, -1))
+            train_info_raw = (store_info[info_index][:,self.train_env_index,:] * delta /
+                          2).min(dim=1)[0].mean(dim=0).reshape((-1))
             return {
                 "train_results": train_results,
                 "test_results": test_results,
-                "train_info": train_info,
+                "train_info": train_info_raw,
                 "train_dis":torch.mean(train_results.max(dim=0)[0]),
-                "test_dis":torch.mean(test_results.max(dim=0)[0])
+                "test_dis":torch.mean(test_results.max(dim=0)[0]),
+                "info_mean":train_info_raw.mean()
             }
         return {
             "train_results": train_results,
             "test_results": test_results,
             "train_info": None,
             "train_dis":torch.mean(train_results.max(dim=0)[0]),
-            "test_dis":torch.mean(test_results.max(dim=0)[0])
+            "test_dis":torch.mean(test_results.max(dim=0)[0]),
+            "info_mean":None,
         }
 
     def backward(self, backward_method = 'mean', lr = 1):

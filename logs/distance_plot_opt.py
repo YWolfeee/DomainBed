@@ -105,15 +105,17 @@ def train_process(optimier, steps=100, check_freq=50):
 def plot_once(results, npy_file_path, marker, steps):
     # 画图部分
     plt.figure(figsize=(36, 20))
-    train_distance = results['train_results']
-    test_distance = results['test_results']
+    train_info = results['train_info']
+    selected_feature = [i for i in range(len(train_info)) if train_info[i] >= args.info_threshold]
+    print("using info threshold %f, select feature: %d/%d" % (args.info_threshold,len(selected_feature),len(train_info)))
+    train_distance = np.max(results['train_results'],axis=0)[selected_feature]
+    test_distance = np.max(results['test_results'],axis=0)[selected_feature]
+    
     if args.add_info_plot:
-        train_info = results['train_info']
-        plt.scatter(np.max(train_distance, axis=0), np.max(test_distance, axis=0),
-                    c=train_info.reshape((-1)), s=[1 + 400 * w for w in np.average(train_info, axis=0)])
+        plt.scatter(train_distance, test_distance,
+                    c=train_info[selected_feature], s=[1 + 400 * w for w in train_info[selected_feature]])
     else:
-        plt.scatter(np.max(train_distance, axis=0),
-                    np.max(test_distance, axis=0))
+        plt.scatter(train_distance, test_distance)
     plt.xlim(-0.005, 1.005)
     plt.ylim(-0.005, 1.005)
     plt.xticks(size=15)
@@ -121,14 +123,14 @@ def plot_once(results, npy_file_path, marker, steps):
     plt.xlabel("Invarnance in training envs",fontsize=20)
     plt.ylabel("Invarnance in all envs",fontsize=20)
     variance_str = str(int(
-        1000 * results['train_dis'])).ljust(4, '0') + "+" + str(int(1000 * results['test_dis'])).ljust(4, '0')
+        1000 * np.average(train_distance))).ljust(4, '0') + "+" + str(int(1000 * np.average(test_distance))).ljust(4, '0')
     print("ready to show/save features with averagely [ train dis %.4f, test dis %.4f, avg info %.4f ]" %(
-        results['train_dis'],results['test_dis'],np.average(results['train_info'])))
+        np.average(train_distance),np.average(test_distance),np.average(train_info[selected_feature])))
     if args.show:
         plt.show()
     else:
         fig_name = marker + "_drag_" + args.plot_method + "_steps" + \
-            str(steps) + "_lr" + str(args.lr) + "_" + variance_str + '.png'
+            str(steps) + "_lr" + str(args.lr) + "_" + variance_str + '_info≥' + str(args.info_threshold) + '.png'
         plt.savefig(npy_file_path + fig_name)
         print("[saved image " + fig_name + "] in " + npy_file_path)
 

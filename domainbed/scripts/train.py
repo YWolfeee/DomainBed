@@ -8,7 +8,6 @@ import random
 import sys
 import time
 import uuid
-import copy
 
 import numpy as np
 import PIL
@@ -51,10 +50,6 @@ if __name__ == "__main__":
     parser.add_argument('--skip_model_save', action='store_true')
     parser.add_argument('--save_model_every_checkpoint', action='store_true')
     parser.add_argument('--extract_feature', type=str, default=None)  # 是否extract每个特征的分布
-    parser.add_argument('--output_result_file', type=str, default=None)  # 是否extract每个特征的分布
-    parser.add_argument('--follow_plot', action='store_true')
-    parser.add_argument('--just_extract_feature', action='store_true')
-    parser.add_argument('--init_model', type=str, default=None)
     args = parser.parse_args()
 
     title_flag = True
@@ -322,3 +317,8 @@ if __name__ == "__main__":
 
     with open(os.path.join(args.output_dir, 'done'), 'w') as f:
         f.write('done')
+
+parser.add_argument('--output_result_file', type=str, default=None)  # 是否extract每个特征的分布
+parser.add_argument('--follow_plot', action='store_true')
+    parser.add_argument('--just_extract_feature', action='store_true')
+    parser.add_argument('--init_model', type=str, default=None)

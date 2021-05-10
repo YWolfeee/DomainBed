@@ -22,8 +22,6 @@ from domainbed import algorithms
 from domainbed.lib import misc
 from domainbed.lib.fast_data_loader import InfiniteDataLoader, FastDataLoader
 from domainbed.feature_checker import feature_extractor
-#feature_extractor_for_train
-#from domainbed.matrix_opt_for_train import opt_kde
 
 if __name__ == "__main__":
 
@@ -245,24 +243,7 @@ if __name__ == "__main__":
                           for x, _ in next(uda_minibatches_iterator)]
         else:
             uda_device = None
-        # if args.algorithm == 'CutERM' and step % hparams['cut_step'] == 0 and step not in [0,n_steps-1]:
-        #     #print('step:',step)
-        #     data_dict = feature_extractor_for_train(algorithm, zip(
-        #         eval_loader_names, eval_loaders), device, dataset.num_classes)
-        #     env_list = ['env{}'.format(i) for i in range(len(dataset))]
-        #     train_env = copy.deepcopy(env_list)
-        #     for i in args.test_envs:
-        #         train_env.remove('env{}'.format(i))
-        #     feature_num = 512 if hparams['resnet18'] else 2048
-        #     opt_for_train = opt_kde(env_list, train_env, dataset.num_classes,
-        #         feature_num,data_dict,percent=hparams['cut_percent'],
-        #         sample_size=1000,device=device)
-        #     for _ in range(4000):
-        #         opt_for_train.backward(backward_method='mean', lr=1)
-        #     mt = opt_for_train.forward(set_mask=True)
-        #
-        #     algorithm.update_classifer(mt)
-        #print('do update:',step)
+
         step_vals = algorithm.update(minibatches_device, uda_device)
         checkpoint_vals['step_time'].append(time.time() - step_start_time)
 

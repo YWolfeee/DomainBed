@@ -8,6 +8,7 @@ import random
 import sys
 import time
 import uuid
+import copy
 
 import numpy as np
 import PIL
@@ -21,8 +22,11 @@ from domainbed import algorithms
 from domainbed.lib import misc
 from domainbed.lib.fast_data_loader import InfiniteDataLoader, FastDataLoader
 from domainbed.feature_checker import feature_extractor
+#feature_extractor_for_train
+#from domainbed.matrix_opt_for_train import opt_kde
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(description='Domain generalization')
     parser.add_argument('--data_dir', type=str)
     parser.add_argument('--dataset', type=str, default="RotatedMNIST")
@@ -35,7 +39,7 @@ if __name__ == "__main__":
                         help='Seed for random hparams (0 means "default hparams")')
     parser.add_argument('--trial_seed', type=int, default=0,
                         help='Trial number (used for seeding split_dataset and '
-                        'random_hparams).')
+                             'random_hparams).')
     parser.add_argument('--seed', type=int, default=0,
                         help='Seed for everything else')
     parser.add_argument('--steps', type=int, default=None,
@@ -48,17 +52,25 @@ if __name__ == "__main__":
     parser.add_argument('--uda_holdout_fraction', type=float, default=0)
     parser.add_argument('--skip_model_save', action='store_true')
     parser.add_argument('--save_model_every_checkpoint', action='store_true')
-    parser.add_argument('--extract_feature',type=str,default=None)  # 是否extract每个特征的分布
+    parser.add_argument('--extract_feature', type=str, default=None)  # 是否extract每个特征的分布
+    parser.add_argument('--output_result_file', type=str, default=None)  # 是否extract每个特征的分布
+    parser.add_argument('--follow_plot', action='store_true')
+    parser.add_argument('--just_extract_feature', action='store_true')
+    parser.add_argument('--init_model', type=str, default=None)
     args = parser.parse_args()
 
+    title_flag = True
     # If we ever want to implement checkpointing, just persist these values
     # every once in a while, and then load them from disk here.
     start_step = 0
     algorithm_dict = None
+    if args.init_model is not None:
+        algorithm_dict = torch.load(args.init_model)["model_dict"]
 
     if args.extract_feature is not None:
-        args.output_dir = args.output_dir + args.extract_feature if args.output_dir[-1] == "/" else args.output_dir + "/" + args.extract_feature
-    
+        args.output_dir = args.output_dir + args.extract_feature if args.output_dir[
+                                                                        -1] == "/" else args.output_dir + "/" + args.extract_feature
+
     os.makedirs(args.output_dir, exist_ok=True)
     sys.stdout = misc.Tee(os.path.join(args.output_dir, 'out.txt'))
     sys.stderr = misc.Tee(os.path.join(args.output_dir, 'err.txt'))
@@ -125,12 +137,12 @@ if __name__ == "__main__":
         uda = []
 
         out, in_ = misc.split_dataset(env,
-                                      int(len(env)*args.holdout_fraction),
+                                      int(len(env) * args.holdout_fraction),
                                       misc.seed_hash(args.trial_seed, env_i))
 
         if env_i in args.test_envs:
             uda, in_ = misc.split_dataset(in_,
-                                          int(len(in_)*args.uda_holdout_fraction),
+                                          int(len(in_) * args.uda_holdout_fraction),
                                           misc.seed_hash(args.trial_seed, env_i))
 
         if hparams['class_balanced']:
@@ -167,7 +179,7 @@ if __name__ == "__main__":
         num_workers=dataset.N_WORKERS)
         for env, _ in (in_splits + out_splits + uda_splits)]
     eval_weights = [None for _, weights in (
-        in_splits + out_splits + uda_splits)]
+            in_splits + out_splits + uda_splits)]
     eval_loader_names = ['env{}_in'.format(i)
                          for i in range(len(in_splits))]
     eval_loader_names += ['env{}_out'.format(i)
@@ -188,13 +200,16 @@ if __name__ == "__main__":
     uda_minibatches_iterator = zip(*uda_loaders)
     checkpoint_vals = collections.defaultdict(lambda: [])
 
-    steps_per_epoch = min([len(env)/hparams['batch_size']
-                          for env, _ in in_splits])
+    steps_per_epoch = min([len(env) / hparams['batch_size']
+                           for env, _ in in_splits])
 
     n_steps = args.steps or dataset.N_STEPS
     checkpoint_freq = args.checkpoint_freq or dataset.CHECKPOINT_FREQ
 
+
     def save_checkpoint(filename):
+        import copy
+        cpa = copy.deepcopy(algorithm)
         if args.skip_model_save:
             return
         save_dict = {
@@ -203,29 +218,58 @@ if __name__ == "__main__":
             "model_num_classes": dataset.num_classes,
             "model_num_domains": len(dataset) - len(args.test_envs),
             "model_hparams": hparams,
-            "model_dict": algorithm.cpu().state_dict()
+            "model_dict": cpa.cpu().state_dict()
         }
+        del cpa
         torch.save(save_dict, os.path.join(args.output_dir, filename))
 
 
     last_results_keys = None
+
+    if args.extract_feature is not None and args.just_extract_feature:
+        if args.output_dir[-1] == '/':
+            marker = args.output_dir + "extracted"
+        else:
+            marker = args.output_dir + "/" + "extracted"
+        feature_extractor(algorithm, zip(
+            eval_loader_names, eval_loaders), device, dataset.num_classes, marker)
+        exit()
+
     for step in range(start_step, n_steps):
         step_start_time = time.time()
         minibatches_device = [(x.to(device), y.to(device))
                               for x, y in next(train_minibatches_iterator)]
+        # print(len(minibatches_device))
         if args.task == "domain_adaptation":
             uda_device = [x.to(device)
                           for x, _ in next(uda_minibatches_iterator)]
         else:
             uda_device = None
+        # if args.algorithm == 'CutERM' and step % hparams['cut_step'] == 0 and step not in [0,n_steps-1]:
+        #     #print('step:',step)
+        #     data_dict = feature_extractor_for_train(algorithm, zip(
+        #         eval_loader_names, eval_loaders), device, dataset.num_classes)
+        #     env_list = ['env{}'.format(i) for i in range(len(dataset))]
+        #     train_env = copy.deepcopy(env_list)
+        #     for i in args.test_envs:
+        #         train_env.remove('env{}'.format(i))
+        #     feature_num = 512 if hparams['resnet18'] else 2048
+        #     opt_for_train = opt_kde(env_list, train_env, dataset.num_classes,
+        #         feature_num,data_dict,percent=hparams['cut_percent'],
+        #         sample_size=1000,device=device)
+        #     for _ in range(4000):
+        #         opt_for_train.backward(backward_method='mean', lr=1)
+        #     mt = opt_for_train.forward(set_mask=True)
+        #
+        #     algorithm.update_classifer(mt)
+        #print('do update:',step)
         step_vals = algorithm.update(minibatches_device, uda_device)
         checkpoint_vals['step_time'].append(time.time() - step_start_time)
 
         for key, val in step_vals.items():
             checkpoint_vals[key].append(val)
-
         if ((step % checkpoint_freq == 0) or (step == n_steps - 1)) and (step > 0):
-            
+
             results = {
                 'step': step,
                 'epoch': step / steps_per_epoch,
@@ -236,8 +280,11 @@ if __name__ == "__main__":
 
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
             for name, loader, weights in evals:
+                start = time.time()
+                loaderlen = len(loader)
                 acc = misc.accuracy(algorithm, loader, weights, device)
-                results[name+'_acc'] = acc
+                # print("eavl " + name + " with loader len " + str(loaderlen) + " use time " + str(round(time.time()-start,3)))
+                results[name + '_acc'] = acc
 
             results_keys = sorted(results.keys())
             if results_keys != last_results_keys:
@@ -245,6 +292,25 @@ if __name__ == "__main__":
                 last_results_keys = results_keys
             misc.print_row([results[key] for key in results_keys],
                            colwidth=12)
+
+            if args.output_result_file is not None:
+                # print('enter this step')
+                assert args.extract_feature is not None
+                if title_flag and not os.path.exists('logs/' + args.output_result_file):
+                    title = "name"
+                    for key in results_keys:
+                        title += ',' + key
+                    title += '\n'
+                    with open('logs/' + args.output_result_file, 'a+') as f:
+                        f.write(title)
+                title_flag = False
+
+                with open('logs/' + args.output_result_file, 'a+') as f:
+                    res = args.extract_feature + ',' + \
+                          str([results[key] for key in results_keys])[1:-1]
+                    if not args.follow_plot:
+                        res += '\n'
+                    f.write(res)
 
             results.update({
                 'hparams': hparams,

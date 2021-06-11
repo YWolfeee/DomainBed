@@ -9,10 +9,6 @@ which runs all commands serially on the local machine.
 import subprocess
 import time
 import torch
-
-def donothing():
-    pass
-
 def local_launcher(commands):
     """Launch commands serially on the local machine."""
     for cmd in commands:
@@ -27,8 +23,6 @@ def dummy_launcher(commands):
         print(f'Dummy launcher: {cmd}')
 
 def multi_gpu_launcher(commands):
-    def donothing():
-        pass
     """
     Launch commands on the local machine, using all GPUs in parallel.
     """

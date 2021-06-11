@@ -143,7 +143,10 @@ class Fish(Algorithm):
 
     def update(self, minibatches, unlabeled=None):
         self.create_clone(minibatches[0][0].device)
-
+        
+        def donothing():
+            pass
+        
         for x, y in minibatches:
             loss = F.cross_entropy(self.network_inner(x), y)
             self.optimizer_inner.zero_grad()

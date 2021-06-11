@@ -4,23 +4,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.autograd as autograd
-from torch.autograd import Variable
 
 import copy
 import numpy as np
-from collections import defaultdict
 
 from domainbed import networks
-from domainbed.lib.misc import random_pairs_of_minibatches, ParamDict
+from domainbed.lib.misc import random_pairs_of_minibatches
+from domainbed.matrix_opt_for_train import opt_kde
 
 ALGORITHMS = [
     'ERM',
-    'Fish',
+    'RegularERM',
+    'AblationRERM',
     'IRM',
     'GroupDRO',
     'Mixup',
     'MLDG',
     'CORAL',
+    'RegularCORAL'
     'MMD',
     'DANN',
     'CDANN',
@@ -30,9 +31,7 @@ ALGORITHMS = [
     'VREx',
     'RSC',
     'SD',
-    'ANDMask',
-    'IGA',
-    'SelfReg'
+    'MyRSC'
 ]
 
 def get_algorithm_class(algorithm_name):
@@ -57,6 +56,7 @@ class Algorithm(torch.nn.Module):
         """
         Perform one update step, given a list of (x, y) tuples for all
         environments.
+
         Admits an optional list of unlabeled minibatches from the test domains,
         when task is domain_adaptation.
         """
@@ -104,67 +104,188 @@ class ERM(Algorithm):
     def feature(self, x):
         return self.featurizer(x)
 
-class Fish(Algorithm):
+class CutERM(ERM):
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(CutERM, self).__init__(input_shape, num_classes, num_domains,
+                                         hparams)
+        self.label_num = num_classes
+        self.feature_num = self.featurizer.n_outputs
+        self.env_num = num_domains
+        self.update_cal = 0
+
+    def update(self, minibatches, unlabeled=None):
+        self.update_cal += 1 # only difference with ERM
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss = F.cross_entropy(self.predict(all_x), all_y)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
+    def update_classifer(self,cut_param:torch.Tensor):
+        cut_param.detach_()
+        cut_param.requires_grad = False
+        self.classifier.weight.data = torch.matmul(self.classifier.weight.data,cut_param)
+
+
+class RegularERM(ERM):
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(RegularERM, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams)
+
+        self.use_erm = False
+        if 'use_erm' in hparams:
+            self.use_erm = hparams['use_erm']
+        self.label_num = num_classes
+        self.feature_num = self.featurizer.n_outputs
+        self.env_num = num_domains
+        self.gamma = 0
+        self.mean_method = 'full_decay'
+        print('mean_method:',self.mean_method)
+        if 'mean_method' in hparams:
+            mth = hparams['mean_method']
+            assert mth in ['decay_per_step','decay_per_data','full_decay'], 'make sure mean_method right'
+            self.mean_method = mth
+
+        if 'RERM_gamma' in hparams:
+            self.gamma = hparams['RERM_gamma']
+        self.lam = 0.0
+        if 'RERM_lam' in hparams:
+            self.lam = hparams['RERM_lam']
+        if self.lam < 1e-10:
+            self.use_erm = True
+        if not self.use_erm:
+            self.register_buffer('mean_table',
+                                 torch.zeros([self.label_num, self.env_num, self.feature_num]))
+            self.register_buffer('visit_table',
+                                 torch.zeros([self.label_num, self.env_num]))
+            # visit_table will be used in a different way in full_decay method
+
+
+    def update(self, minibatches, unlabeled=None):
+        if self.use_erm:
+            return super().update(minibatches)
+
+        # calculate mean
+        # only the newest data will cause gradient
+        if self.mean_method == 'decay_per_data':
+            self.mean_table.detach_()
+            for env_id, (x, y) in enumerate(minibatches):
+                feats = self.feature(x)
+
+                # sweep all label
+                for i in range(self.label_num):
+                    fetch_ids = torch.where(y == i)[0]
+                    if len(fetch_ids):
+                        # if there is label i, average them
+                        tmp = torch.mean(feats[fetch_ids, :], dim=0)
+                        if self.visit_table[i, env_id] > 0.01:
+                            # if it's not the fist time, do decay
+                            self.mean_table[i, env_id, :] = (1 - self.gamma) * self.mean_table[i, env_id, :] \
+                                                            + self.gamma * tmp
+                        else:
+                            # otherwise, no decay, set visit to 1
+                            self.mean_table[i, env_id, :] = tmp
+                            self.visit_table[i, env_id] = 1.0
+                # else:
+                #    self.mean_table[y,env_id,:] += self.gamma*feats
+
+            loss1 = self.lam * torch.mean(torch.var(self.mean_table, dim=1))
+            all_x = torch.cat([x for x, y in minibatches])
+            all_y = torch.cat([y for x, y in minibatches])
+            loss2 = F.cross_entropy(self.predict(all_x), all_y)
+            self.optimizer.zero_grad()
+            loss = loss1 + loss2
+            loss.backward()
+            self.optimizer.step()
+
+            return {'loss': loss.item(),
+                    'loss_acc': loss2.item(),
+                    'loss_mean': loss1.item(),
+                    }
+        if self.mean_method == 'full_decay':
+            x0,_ = minibatches[0]
+            visit_table = x0.new_zeros([self.label_num,self.env_num])
+            mean_table = x0.new_zeros([self.label_num,self.env_num,self.feature_num])
+            for env_id, (x, y) in enumerate(minibatches):
+                feats = self.feature(x)
+                for i in range(self.label_num):
+                    fetch_ids = torch.where(y == i)[0]
+                    if len(fetch_ids):
+                        # if there is label i, average them
+                        visit_table[i,env_id] = 1.0
+                        mean_table[i,env_id,:] = torch.mean(feats[fetch_ids, :], dim=0)
+            mean_loss = x0.new_zeros([1])
+            nzlabel = 0.0
+            for i in range(self.label_num):
+                # TODO: vars sum or difference sum ?
+                fetch_envs = torch.where(visit_table[i,:]>0.01)[0]
+                if len(fetch_envs)>1:
+                    mean_loss += torch.mean(torch.var(mean_table[i,fetch_envs,:],dim=1))
+                    nzlabel += 1.0
+            mean_loss = self.lam * mean_loss / nzlabel
+
+            all_x = torch.cat([x for x, y in minibatches])
+            all_y = torch.cat([y for x, y in minibatches])
+            loss2 = F.cross_entropy(self.predict(all_x), all_y)
+            loss = mean_loss + loss2
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            return {'loss': loss.item(),
+                    'loss_acc': loss2.item(),
+                    'loss_mean': mean_loss.item(),
+                    }
+
+    def feature_predict(self,x):
+        return self.classifier(x)
+
+
+class AblationRERM(Algorithm):
     """
-    Implementation of Fish, as seen in Gradient Matching for Domain 
-    Generalization, Shi et al. 2021.
+    Empirical Risk Minimization (ERM)
     """
 
     def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(Fish, self).__init__(input_shape, num_classes, num_domains,
-                                   hparams)
-        self.input_shape = input_shape
-        self.num_classes = num_classes
-
-        self.network = networks.WholeFish(input_shape, num_classes, hparams)
+        super(AblationRERM, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = networks.Classifier(
+            self.featurizer.n_outputs,
+            num_classes,
+            self.hparams['nonlinear_classifier'])
+        # TODO: find those para in dataset or args
+        self.label_num = 75
+        self.feature_num = self.featurizer.n_outputs
+        env_num = 3
+        self.layer_norm = nn.LayerNorm([self.feature_num])
+        self.featurizer = nn.Sequential(self.featurizer,self.layer_norm)
+        self.network = nn.Sequential(self.featurizer,self.classifier)
         self.optimizer = torch.optim.Adam(
             self.network.parameters(),
             lr=self.hparams["lr"],
             weight_decay=self.hparams['weight_decay']
         )
-        self.optimizer_inner_state = None
-
-    def create_clone(self, device):
-        self.network_inner = networks.WholeFish(self.input_shape, self.num_classes, self.hparams,
-                                            weights=self.network.state_dict()).to(device)
-        self.optimizer_inner = torch.optim.Adam(
-            self.network_inner.parameters(),
-            lr=self.hparams["lr"],
-            weight_decay=self.hparams['weight_decay']
-        )
-        if self.optimizer_inner_state is not None:
-            self.optimizer_inner.load_state_dict(self.optimizer_inner_state)
-
-    def fish(self, meta_weights, inner_weights, lr_meta):
-        meta_weights = ParamDict(meta_weights)
-        inner_weights = ParamDict(inner_weights)
-        meta_weights += lr_meta * (inner_weights - meta_weights)
-        return meta_weights
 
     def update(self, minibatches, unlabeled=None):
-        self.create_clone(minibatches[0][0].device)
-        
-        def donothing():
-            pass
-        
-        for x, y in minibatches:
-            loss = F.cross_entropy(self.network_inner(x), y)
-            self.optimizer_inner.zero_grad()
-            loss.backward()
-            self.optimizer_inner.step()
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss = F.cross_entropy(self.predict(all_x), all_y)
 
-        self.optimizer_inner_state = self.optimizer_inner.state_dict()
-        meta_weights = self.fish(
-            meta_weights=self.network.state_dict(),
-            inner_weights=self.network_inner.state_dict(),
-            lr_meta=self.hparams["meta_lr"]
-        )
-        self.network.reset_weights(meta_weights)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
         return {'loss': loss.item()}
 
     def predict(self, x):
         return self.network(x)
+
+    # 提取特征
+    def feature(self, x):
+        return self.featurizer(x)
 
 
 class ARM(ERM):
@@ -429,6 +550,39 @@ class Mixup(ERM):
 
         return {'loss': objective.item()}
 
+class RegularMixup(Mixup):
+    class Mixup(ERM):
+        """
+        Mixup of minibatches from different domains
+        https://arxiv.org/pdf/2001.00677.pdf
+        https://arxiv.org/pdf/1912.01805.pdf
+        """
+
+        def __init__(self, input_shape, num_classes, num_domains, hparams):
+            super(Mixup, self).__init__(input_shape, num_classes, num_domains,
+                                        hparams)
+
+        def update(self, minibatches, unlabeled=None):
+            objective = 0
+
+            for (xi, yi), (xj, yj) in random_pairs_of_minibatches(minibatches):
+                lam = np.random.beta(self.hparams["mixup_alpha"],
+                                     self.hparams["mixup_alpha"])
+
+                x = lam * xi + (1 - lam) * xj
+                predictions = self.predict(x)
+
+                objective += lam * F.cross_entropy(predictions, yi)
+                objective += (1 - lam) * F.cross_entropy(predictions, yj)
+
+            objective /= len(minibatches)
+
+            self.optimizer.zero_grad()
+            objective.backward()
+            self.optimizer.step()
+
+            return {'loss': objective.item()}
+
 
 class GroupDRO(ERM):
     """
@@ -480,11 +634,15 @@ class MLDG(ERM):
         Terms being computed:
             * Li = Loss(xi, yi, params)
             * Gi = Grad(Li, params)
+
             * Lj = Loss(xj, yj, Optimizer(params, grad(Li, params)))
             * Gj = Grad(Lj, params)
+
             * params = Optimizer(params, Grad(Li + beta * Lj, params))
             *        = Optimizer(params, Gi + beta * Gj)
+
         That is, when calling .step(), we want grads to be Gi + beta * Gj
+
         For computational efficiency, we do not compute second derivatives.
         """
         num_mb = len(minibatches)
@@ -617,6 +775,7 @@ class AbstractMMD(ERM):
             mean_y = y.mean(0, keepdim=True)
             cent_x = x - mean_x
             cent_y = y - mean_y
+            cent_y = y - mean_y
             cova_x = (cent_x.t() @ cent_x) / (len(x) - 1)
             cova_y = (cent_y.t() @ cent_y) / (len(y) - 1)
 
@@ -671,6 +830,75 @@ class CORAL(AbstractMMD):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(CORAL, self).__init__(input_shape, num_classes,
                                          num_domains, hparams, gaussian=False)
+
+class RegularCORAL(CORAL):
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(RegularCORAL, self).__init__(input_shape, num_classes,
+                                         num_domains, hparams,)
+        self.use_erm = False
+        if 'use_erm' in hparams:
+            self.use_erm = hparams['use_erm']
+        self.label_num = num_classes
+        self.feature_num = self.featurizer.n_outputs
+        self.env_num = num_domains
+        self.lam = 0.0
+        if 'regular_lam' in hparams:
+            self.lam = hparams['regular_lam']
+        if self.lam < 1e-10:
+            self.use_erm = True
+        if not self.use_erm:
+            self.register_buffer('mean_table',
+                                 torch.zeros([self.label_num, self.env_num, self.feature_num]))
+            self.register_buffer('visit_table',
+                                 torch.zeros([self.label_num, self.env_num]))
+            # visit_table will be used in a different way in full_decay method
+
+    def update(self, minibatches, unlabeled=None):
+        objective = 0
+        penalty = 0
+        nmb = len(minibatches)
+
+        features = [self.featurizer(xi) for xi, _ in minibatches]
+        classifs = [self.classifier(fi) for fi in features]
+        targets = [yi for _, yi in minibatches]
+
+        for i in range(nmb):
+            objective += F.cross_entropy(classifs[i], targets[i])
+            for j in range(i + 1, nmb):
+                penalty += self.mmd(features[i], features[j])
+
+        objective /= nmb
+        if nmb > 1:
+            penalty /= (nmb * (nmb - 1) / 2)
+
+        x0, _ = minibatches[0]
+        visit_table = x0.new_zeros([self.label_num, self.env_num])
+        mean_table = x0.new_zeros([self.label_num, self.env_num, self.feature_num])
+        for env_id, feats in enumerate(features):
+            for i in range(self.label_num):
+                fetch_ids = torch.where(targets[env_id] == i)[0]
+                if len(fetch_ids):
+                    visit_table[i, env_id] = 1.0
+                    mean_table[i, env_id, :] = torch.mean(feats[fetch_ids, :], dim=0)
+        mean_loss = x0.new_zeros([1])
+        nzlabel = 0.0
+        for i in range(self.label_num):
+            # TODO: vars sum or difference sum ?
+            fetch_envs = torch.where(visit_table[i, :] > 0.01)[0]
+            if len(fetch_envs) > 1:
+                mean_loss += torch.mean(torch.var(mean_table[i, fetch_envs, :], dim=1))
+                nzlabel += 1.0
+        mean_loss = self.lam * mean_loss / nzlabel
+
+        self.optimizer.zero_grad()
+        (objective + (self.hparams['mmd_gamma']*penalty) + mean_loss).backward()
+        self.optimizer.step()
+
+        if torch.is_tensor(penalty):
+            penalty = penalty.item()
+
+        return {'loss': objective.item(), 'penalty': penalty,'loss_mean':mean_loss.item()}
+
 
 
 class MTL(Algorithm):
@@ -854,6 +1082,7 @@ class RSC(ERM):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(RSC, self).__init__(input_shape, num_classes, num_domains,
                                    hparams)
+        self.network
         self.drop_f = (1 - hparams['rsc_f_drop_factor']) * 100
         self.drop_b = (1 - hparams['rsc_b_drop_factor']) * 100
         self.num_classes = num_classes
@@ -932,186 +1161,138 @@ class SD(ERM):
 
         return {'loss': loss.item(), 'penalty': penalty.item()}
 
-class ANDMask(ERM):
-    """
-    Learning Explanations that are Hard to Vary [https://arxiv.org/abs/2009.00329]
-    AND-Mask implementation from [https://github.com/gibipara92/learning-explanations-hard-to-vary]
-    """
+from torch.autograd import Variable
+import random,math
+class Identity(nn.Module):
+    """An identity layer"""
+    def __init__(self):
+        super(Identity, self).__init__()
 
+    def forward(self, x):
+        return x
+
+class MyRSC(ERM):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(ANDMask, self).__init__(input_shape, num_classes, num_domains, hparams)
-
-        self.tau = hparams["tau"]
-
-    def update(self, minibatches, unlabeled=None):
-        
-        total_loss = 0
-        param_gradients = [[] for _ in self.network.parameters()]
-        all_x = torch.cat([x for x,y in minibatches])
-        all_logits = self.network(all_x)
-        all_logits_idx = 0
-        for i, (x, y) in enumerate(minibatches):
-            logits = all_logits[all_logits_idx:all_logits_idx + x.shape[0]]
-            all_logits_idx += x.shape[0]
-            
-            env_loss = F.cross_entropy(logits, y)
-            total_loss += env_loss
-
-            env_grads = autograd.grad(env_loss, self.network.parameters(), retain_graph=True)
-            for grads, env_grad in zip(param_gradients, env_grads):
-                grads.append(env_grad)
-            
-        mean_loss = total_loss / len(minibatches)
-
-        self.optimizer.zero_grad()
-        self.mask_grads(self.tau, param_gradients, self.network.parameters())
-        self.optimizer.step()
-
-        return {'loss': mean_loss.item()}
-
-    def mask_grads(self, tau, gradients, params):
-
-        for param, grads in zip(params, gradients):
-            grads = torch.stack(grads, dim=0)
-            grad_signs = torch.sign(grads)
-            mask = torch.mean(grad_signs, dim=0).abs() >= self.tau
-            mask = mask.to(torch.float32)
-            avg_grad = torch.mean(grads, dim=0)
-
-            mask_t = (mask.sum() / mask.numel())
-            param.grad = mask * avg_grad
-            param.grad *= (1. / (1e-10 + mask_t))
-
-        return 0
-
-class IGA(ERM):
-    """
-    Inter-environmental Gradient Alignment
-    From https://arxiv.org/abs/2008.01883v2
-    """
-
-    def __init__(self, in_features, num_classes, num_domains, hparams):
-        super(IGA, self).__init__(in_features, num_classes, num_domains, hparams)
-
-    def update(self, minibatches, unlabeled=False):
-
-        all_x = torch.cat([x for x,y in minibatches])
-        all_logits = self.network(all_x)
-
-        total_loss = 0
-        all_logits_idx = 0
-        grads = []
-        for i, (x, y) in enumerate(minibatches):
-            logits = all_logits[all_logits_idx:all_logits_idx + x.shape[0]]
-            all_logits_idx += x.shape[0]
-            
-            env_loss = F.cross_entropy(logits, y)
-            total_loss += env_loss
-
-            grads.append( autograd.grad(env_loss, self.network.parameters(), retain_graph=True) )
-            
-        mean_loss = total_loss / len(minibatches)
-        mean_grad = autograd.grad(mean_loss, self.network.parameters(), retain_graph=True)
-
-        # compute trace penalty
-        penalty_value = 0
-        for grad in grads:
-            for g, mean_g in zip(grad, mean_grad):
-                penalty_value += (g - mean_g).pow(2).sum()
-
-        self.optimizer.zero_grad()
-        (mean_loss + self.hparams['penalty'] * penalty_value).backward()
-        self.optimizer.step()
-
-
-        return {'loss': mean_loss.item(), 'penalty': penalty_value.item()}
-
-    
-    
-class SelfReg(ERM):
-    def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(SelfReg, self).__init__(input_shape, num_classes, num_domains,
+        super(MyRSC, self).__init__(input_shape, num_classes, num_domains,
                                    hparams)
-        self.num_classes = num_classes
-        self.MSEloss = nn.MSELoss()
-        input_feat_size = self.featurizer.n_outputs
-        hidden_size = input_feat_size if input_feat_size==2048 else input_feat_size*2
-        
-        self.cdpl = nn.Sequential(
-                            nn.Linear(input_feat_size, hidden_size),
-                            nn.BatchNorm1d(hidden_size),
-                            nn.ReLU(inplace=True),
-                            nn.Linear(hidden_size, hidden_size),
-                            nn.BatchNorm1d(hidden_size),
-                            nn.ReLU(inplace=True),
-                            nn.Linear(hidden_size, input_feat_size),
-                            nn.BatchNorm1d(input_feat_size)
-        )
-        
+        self.avgpool = copy.deepcopy(self.featurizer.network.avgpool)
+        self.feature_num = self.featurizer.n_outputs
+        del self.featurizer.network.avgpool
+        self.featurizer.network.avgpool = Identity()
+        self.step = 0
+        self.pecent = 0
+
     def update(self, minibatches, unlabeled=None):
-        
+        self.step += 1
         all_x = torch.cat([x for x, y in minibatches])
+        # labels
         all_y = torch.cat([y for _, y in minibatches])
 
-        lam = np.random.beta(0.5, 0.5)
-        
-        batch_size = all_y.size()[0]
-        
-        # cluster and order features into same-class group
-        with torch.no_grad():   
-            sorted_y, indices = torch.sort(all_y)
-            sorted_x = torch.zeros_like(all_x)
-            for idx, order in enumerate(indices):
-                sorted_x[idx] = all_x[order]
-            intervals = []
-            ex = 0
-            for idx, val in enumerate(sorted_y):
-                if ex==val:
-                    continue
-                intervals.append(idx)
-                ex = val
-            intervals.append(batch_size)
+        x = self.featurizer.network(all_x)
+        x = x.view(x.size(0),self.feature_num,-1)
+        feature_map_size = math.floor(math.sqrt(x.size(2)))
+        x = x.view(x.size(0),self.feature_num,feature_map_size,feature_map_size)
 
-            all_x = sorted_x
-            all_y = sorted_y
-        
-        feat = self.featurizer(all_x)
-        proj = self.cdpl(feat)
-        
-        output = self.classifier(feat)
+        interval = 1000
+        if self.step % interval == 0:
+            self.pecent = 3.0 / 10 + (self.step / interval) * 2.0 / 10
 
-        # shuffle
-        output_2 = torch.zeros_like(output)
-        feat_2 = torch.zeros_like(proj)
-        output_3 = torch.zeros_like(output)
-        feat_3 = torch.zeros_like(proj)
-        ex = 0
-        for end in intervals:
-            shuffle_indices = torch.randperm(end-ex)+ex
-            shuffle_indices2 = torch.randperm(end-ex)+ex
-            for idx in range(end-ex):
-                output_2[idx+ex] = output[shuffle_indices[idx]]
-                feat_2[idx+ex] = proj[shuffle_indices[idx]]
-                output_3[idx+ex] = output[shuffle_indices2[idx]]
-                feat_3[idx+ex] = proj[shuffle_indices2[idx]]
-            ex = end
-        
-        # mixup 
-        output_3 = lam*output_2 + (1-lam)*output_3
-        feat_3 = lam*feat_2 + (1-lam)*feat_3
+        self.eval()
+        x_new = x.clone().detach()
+        x_new = Variable(x_new.data, requires_grad=True)
+        #print('x_new:',x_new.size())
+        x_new_view = self.avgpool(x_new)
+        x_new_view = x_new_view.view(x_new_view.size(0), -1)
+        #print('size:',x_new_view.size())
+        output = self.classifier(x_new_view)
+        class_num = output.shape[1]
+        index = all_y
+        num_rois = x_new.shape[0]
+        num_channel = x_new.shape[1]
+        H = x_new.shape[2]
+        HW = x_new.shape[2] * x_new.shape[3]
+        one_hot = torch.zeros((1), dtype=torch.float32).cuda()
+        one_hot = Variable(one_hot, requires_grad=False)
+        sp_i = torch.ones([2, num_rois]).long()
+        sp_i[0, :] = torch.arange(num_rois)
+        sp_i[1, :] = index
+        sp_v = torch.ones([num_rois])
+        one_hot_sparse = torch.sparse.FloatTensor(sp_i, sp_v, torch.Size([num_rois, class_num])).to_dense().cuda()
+        one_hot_sparse = Variable(one_hot_sparse, requires_grad=False)
+        one_hot = torch.sum(output * one_hot_sparse)
+        self.zero_grad()
+        one_hot.backward()
+        grads_val = x_new.grad.clone().detach()
+        grad_channel_mean = torch.mean(grads_val.view(num_rois, num_channel, -1), dim=2)
+        channel_mean = grad_channel_mean
+        grad_channel_mean = grad_channel_mean.view(num_rois, num_channel, 1, 1)
+        spatial_mean = torch.sum(x_new * grad_channel_mean, 1)
+        spatial_mean = spatial_mean.view(num_rois, HW)
+        self.zero_grad()
 
-        # regularization
-        L_ind_logit = self.MSEloss(output, output_2)
-        L_hdl_logit = self.MSEloss(output, output_3)
-        L_ind_feat = 0.3 * self.MSEloss(feat, feat_2)
-        L_hdl_feat = 0.3 * self.MSEloss(feat, feat_3)
-        
-        cl_loss = F.cross_entropy(output, all_y)
-        C_scale = min(cl_loss.item(), 1.)
-        loss = cl_loss + C_scale*(lam*(L_ind_logit + L_ind_feat)+(1-lam)*(L_hdl_logit + L_hdl_feat))
-     
+        choose_one = random.randint(0, 9)
+        if choose_one <= 4:
+            # ---------------------------- spatial -----------------------
+            spatial_drop_num = math.ceil(HW * 1 / 3.0)
+            th18_mask_value = torch.sort(spatial_mean, dim=1, descending=True)[0][:, spatial_drop_num]
+            th18_mask_value = th18_mask_value.view(num_rois, 1).expand(num_rois, 49)
+            mask_all_cuda = torch.where(spatial_mean > th18_mask_value, torch.zeros(spatial_mean.shape).cuda(),
+                                        torch.ones(spatial_mean.shape).cuda())
+            mask_all = mask_all_cuda.reshape(num_rois, H, H).view(num_rois, 1, H, H)
+        else:
+            # -------------------------- channel ----------------------------
+            vector_thresh_percent = math.ceil(num_channel * 1 / 3.2)
+            vector_thresh_value = torch.sort(channel_mean, dim=1, descending=True)[0][:, vector_thresh_percent]
+            vector_thresh_value = vector_thresh_value.view(num_rois, 1).expand(num_rois, num_channel)
+            vector = torch.where(channel_mean > vector_thresh_value,
+                                 torch.zeros(channel_mean.shape).cuda(),
+                                 torch.ones(channel_mean.shape).cuda())
+            mask_all = vector.view(num_rois, num_channel, 1, 1)
+
+        # ----------------------------------- batch ----------------------------------------
+        cls_prob_before = F.softmax(output, dim=1)
+        x_new_view_after = x_new * mask_all
+        x_new_view_after = self.avgpool(x_new_view_after)
+        x_new_view_after = x_new_view_after.view(x_new_view_after.size(0), -1)
+        x_new_view_after = self.classifier(x_new_view_after)
+        cls_prob_after = F.softmax(x_new_view_after, dim=1)
+
+        sp_i = torch.ones([2, num_rois]).long()
+        sp_i[0, :] = torch.arange(num_rois)
+        sp_i[1, :] = index
+        sp_v = torch.ones([num_rois])
+        one_hot_sparse = torch.sparse.FloatTensor(sp_i, sp_v, torch.Size([num_rois, class_num])).to_dense().cuda()
+        before_vector = torch.sum(one_hot_sparse * cls_prob_before, dim=1)
+        after_vector = torch.sum(one_hot_sparse * cls_prob_after, dim=1)
+        change_vector = before_vector - after_vector - 0.0001
+        change_vector = torch.where(change_vector > 0, change_vector, torch.zeros(change_vector.shape).cuda())
+        th_fg_value = torch.sort(change_vector, dim=0, descending=True)[0][
+            int(round(float(num_rois) * self.pecent))]
+        drop_index_fg = change_vector.gt(th_fg_value).long()
+        ignore_index_fg = 1 - drop_index_fg
+        not_01_ignore_index_fg = ignore_index_fg.nonzero()[:, 0]
+        mask_all[not_01_ignore_index_fg.long(), :] = 1
+
+        self.train()
+        mask_all = Variable(mask_all, requires_grad=True)
+        x = x * mask_all
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        #print(x.size())
+        pred = self.classifier(x)
+        loss = F.cross_entropy(pred, all_y)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-
         return {'loss': loss.item()}
+
+    def predict(self, x):
+        x = self.featurizer.network(x)
+        x = x.view(x.size(0), self.feature_num, -1)
+        feature_map_size = math.floor(math.sqrt(x.size(2)))
+        x = x.view(x.size(0), self.feature_num, feature_map_size, feature_map_size)
+        x = self.avgpool(x)
+        #print(x.size())
+        x = x.view(x.size(0), -1)
+        return self.classifier(x)

@@ -5,53 +5,44 @@ import time
 import argparse
 
 
-def shape_to_matrix(feature_num, env_list, label_num, max_data, data_len, data, device='cuda',input_tensor=False):
+def shape_to_matrix(feature_num, env_list, label_num, max_data, data_len, data, device='cuda'):
     env_num = len(env_list)
-    if input_tensor:
-        matrix = torch.zeros((env_num,label_num,max_data,feature_num),device=device)
-    else:
-        matrix = np.zeros((env_num, label_num, max_data,
-                       feature_num), dtype=np.float32)
+    matrix = torch.zeros([env_num, label_num, max_data,
+                       feature_num], device=device)
+    #print('env_list',env_list)
     for env in range(env_num):
         for label in range(label_num):
             matrix[env][label][0:data_len[env, label]
             ] = data[label][env_list[env]]
-    if input_tensor:
-        return matrix
-    else:
-        return torch.from_numpy(matrix).to(device)
-
-
-def torch_to_numpy(d):
-    return {
-        key: d[key].cpu().numpy()
-        for key in d.keys()
-        if d[key] is not None
-    }
+            #print('data_len:',data_len[env, label])
+            #print('data:',data[label][env_list[env]])
+        #print('______env______:',env)
+    #print(matrix)
+    return matrix
 
 
 class opt_kde(torch.nn.Module):
-    def __init__(self, env_list, train_env, num_classes, feature_num, data,sample_size,device):
+    def __init__(self, env_list, train_env, num_classes, feature_num,data,percent=0.5,
+                 sample_size=1000,device='cuda'):
         self.sample_size = sample_size
         self.device = device
         self.envs = env_list
         self.train_env = train_env
         self.envs_num = len(self.envs)
-        self.train_env_index = [i for i in range(self.envs_num) if env_list[i] in self.train_env]
-        input_tensor = False
-        if isinstance(data[0][env_list[0]],torch.Tensor):
-            input_tensor = True
+        self.mask = None
+        self.percent = percent
 
         # 准备初始化数据
         data_len = np.zeros(
             (len(env_list), num_classes), dtype=np.int32)
         for i in range(len(env_list)):
             for j in range(num_classes):
-                data_len[i][j] = data[j][env_list[i]].shape[0]
+                data_len[i][j] = len(data[j][env_list[i]])
+        #print('data:',data)
         matrix = shape_to_matrix(feature_num=feature_num, env_list=env_list, label_num=num_classes,
                                  max_data=int(
                                      max([max(w) for w in data_len])), data_len=data_len, data=data,
-                                 device=device,input_tensor=input_tensor)
+                                 device=device)
 
         # 确认参数匹配
         self.feature_num = matrix.shape[3]
@@ -62,8 +53,8 @@ class opt_kde(torch.nn.Module):
         assert matrix.shape[0] == len(
             env_list), "length of envs in data does match provided envs"
 
-        std = torch.std(matrix, dim=2).mean().clone().detach()
-        self.matrix = matrix / std
+        self.matrix = matrix
+        #print('matrix', self.matrix)
 
         self.data_len = torch.tensor(data_len, dtype=torch.float32)
         self.data_mask = torch.ones(
@@ -75,12 +66,11 @@ class opt_kde(torch.nn.Module):
 
         self.bandwidth = 1.06 * \
                          self.max_sample ** (-1. / (1 + 4)) * \
-                         torch.std(self.matrix, dim=2).mean().clone().detach()
-
+                         torch.std(matrix, dim=2).mean().clone().detach()
         self.offset = torch.exp(-0.5 / (self.bandwidth ** 2)).to(self.device)
         # self.sample_size = int(sample_size * (torch.max(matrix) - torch.min(matrix)).cpu().item())
 
-        self.batch_len = 10
+        self.batch_len = 1
         self.batch_size = (self.sample_size +
                            self.batch_len - 1) // self.batch_len
 
@@ -91,19 +81,12 @@ class opt_kde(torch.nn.Module):
         self.params = self.params / torch.sqrt(torch.sum(self.params ** 2, dim=0, keepdim=True)).detach().clamp_min_(
             1e-3)
 
-    def forward(self, cal_info=False, verbose=False, whether_backward=False, lr=None,use_mean_info=True):
-        # backward = True
-        # lr = 10
-        if whether_backward == True:
-            cal_info = False
-            verbose = False
-            accum_grad = torch.zeros_like(self.params).to(self.device)
-            # optimizer = torch.optim.SGD([self.params], lr=lr)
-
+    def forward(self, cal_info=False, verbose=False,set_mask=False):
         # matmul matrix params, s.t. check the results in this linear combination
-        matrix = torch.matmul(self.matrix, self.params).unsqueeze(dim=-1).detach()
+        matrix = torch.matmul(self.matrix, self.params).detach().unsqueeze(dim=-1)
         left, right = torch.min(matrix).cpu(
         ).item(), torch.max(matrix).cpu().item()
+
         if verbose:
             print("sample message: from %.4f to %.4f, size is %d" %
                   (left, right, self.sample_size))
@@ -121,57 +104,28 @@ class opt_kde(torch.nn.Module):
 
         index = 0
         train_index = []
-        test_index = []
         for envi in range(self.envs_num):
             for envj in range(self.envs_num):
-                if self.envs[envi] in self.train_env and self.envs[envj] in self.train_env and envi < envj:
+                if self.envs[envi] in self.train_env and self.envs[envj] in self.train_env:
                     train_index.append(index)
-                if envi < envj:
-                    test_index.append(index)
-                index += 1
-
-        index = 0
-        info_index = []
-        for labeli in range(self.label_num):
-            for labelj in range(self.label_num):
-                if labeli < labelj:
-                    info_index.append(index)
                 index += 1
 
         timing = 1000 // self.batch_len
         for batch in range(self.batch_size):
             if batch % timing == 0:
                 start = time.time()
-            if whether_backward:
-                matrix = torch.matmul(self.matrix, self.params).unsqueeze(dim=-1)
             points = x_gird[batch *
                             self.batch_len:min((batch + 1) * self.batch_len, self.sample_size)].reshape((1, -1))
-            #print(
-                #'over:',torch.sum(torch.pow(self.offset, (matrix - points) ** 2), dim=2) -
-                       #((reduce_zeros - self.len_unsqueeze) *
-                       # torch.pow(self.offset, points ** 2)).unsqueeze(dim=2))
-
             reducer = (torch.sum(torch.pow(self.offset, (matrix - points) ** 2), dim=2) -
                        ((reduce_zeros - self.len_unsqueeze) *
                         torch.pow(self.offset, points ** 2)).unsqueeze(dim=2)
                        ) / self.len_unsqueeze.unsqueeze(dim=3)
-            #print('dw:',self.len_unsqueeze.unsqueeze(dim=3))
-            #print('reducer:',reducer)
 
             dis_expand = reducer.expand(
                 (self.envs_num, self.envs_num, self.label_num, self.feature_num, reducer.shape[-1]))
-
-            if whether_backward:
-                adder = torch.sum(torch.abs(dis_expand - dis_expand.permute(1, 0, 2, 3, 4)), dim=-1).reshape(
-                    (-1, self.label_num, self.feature_num)) / divisor
-                store_dis = (store_dis + adder).detach()
-                loss = (adder).mean() * delta / 2
-
-                accum_grad += torch.autograd.grad(loss, self.params)[0].detach()
-            else:
-                store_dis += torch.sum(torch.abs(dis_expand - dis_expand.permute(1, 0, 2, 3, 4)), dim=-1).reshape(
-                    (-1, self.label_num, self.feature_num)) / divisor
-
+            store_dis += torch.sum(torch.abs(dis_expand - dis_expand.permute(1, 0, 2, 3, 4)), dim=-1).reshape(
+                (-1, self.label_num, self.feature_num)) / divisor
+            #print(store_dis)
             if cal_info:
                 info_expand = reducer.permute(1, 0, 2, 3).expand(
                     (self.label_num, self.label_num, self.envs_num, self.feature_num, reducer.shape[-1]))
@@ -183,71 +137,90 @@ class opt_kde(torch.nn.Module):
                       ((batch + 1) * self.batch_len, (time.time() - start) / timing / self.batch_len))
                 # print("pure cal:" + str(cal_time / timing/self.batch_len))
 
-        test_results = (store_dis[test_index] * delta / 2).max(dim=0)[0]
+        test_results = (store_dis * delta / 2).max(dim=0)[0]
         train_results = (store_dis[train_index] * delta / 2).max(dim=0)[0]
         if verbose:
             print("finish forward once.")
 
-        if whether_backward:
-            self.params -= lr * accum_grad
-            self.normalize()
+        if set_mask:
+            feature_dis = train_results.max(dim=0)[0].view(-1)
+            self.mask = torch.topk(feature_dis,int(self.percent*len(feature_dis)),largest=True)[1]
+            # find smallest channel, set param to 0
+            print('mask len:',len(self.mask))
+            if len(self.mask) == 0:
+                return torch.eye(self.params.size(0),device=self.device)
+            save_param = self.params.detach().clone()
+            save_param[:,self.mask] = 0
+            inverse_param = torch.inverse(self.params)
+            inverse_param[self.mask,:]=0
+            res = torch.matmul(save_param,inverse_param)
+            print('diff from identity:',torch.norm(res - torch.eye(self.feature_num,device=self.device)))
+            return res
 
         if cal_info:
             # should consider min env s.t. this to feature is exhibit, and select the biggest label pair
             # train_info = (store_info * delta / 2).max(dim=0)[0]
             # return a (1, feature_num) dimension
-            if use_mean_info:
-                train_info_raw = (store_info[info_index][:, self.train_env_index, :] * delta /
-                                  2).min(dim=1)[0].mean(dim=0).reshape((-1))
-            else:
-                train_info_raw = (store_info[info_index][:, self.train_env_index, :] * delta /
-                                  2).min(dim=1)[0].max(dim=0).reshape((-1))
+            train_info = (store_info * delta /
+                          2).min(dim=1)[0].max(dim=0)[0].reshape((1, -1))
             return {
                 "train_results": train_results,
                 "test_results": test_results,
-                "train_info": train_info_raw,
+                "train_info": train_info,
                 "train_dis": torch.mean(train_results.max(dim=0)[0]),
-                "test_dis": torch.mean(test_results.max(dim=0)[0]),
-                "info_mean": train_info_raw.mean()
+                "test_dis": torch.mean(test_results.max(dim=0)[0])
             }
         return {
             "train_results": train_results,
             "test_results": test_results,
             "train_info": None,
             "train_dis": torch.mean(train_results.max(dim=0)[0]),
-            "test_dis": torch.mean(test_results.max(dim=0)[0]),
-            "info_mean": None,
+            "test_dis": torch.mean(test_results.max(dim=0)[0])
         }
+
+    @torch.no_grad()
+    def pca(self):
+        mean_value = torch.mean(self.matrix @ self.params, dim=2) * (
+                self.max_sample / self.len_unsqueeze)
+        # mean_valuse is of shape (env,label,feature)
+        x = mean_value.unsqueeze(1)
+        y = mean_value.unsqueeze(0)
+        feat = (x - y).view(-1, self.feature_num)
+        feat1 = feat.unsqueeze(2)
+        feat2 = feat.unsqueeze(1)
+        mat = torch.mean(feat1 * feat2, dim=0)
+        eig = torch.eig(mat, eigenvectors=True)
+        print('min eig of data:{}'.format(torch.min(eig[0]).item()))
+        lam = torch.diag(torch.sqrt(eig[0]))
+        self.params = lam * eig[1]
 
     def backward(self, backward_method='mean', lr=1):
         if backward_method == 'L1':
             # 这里考虑对env取完max之后对label做mean，这样子可以增加数据量
             # argmax: label x feature → train_index上的index
             # 表示的是对这个params的分量，这个label，是哪两个环境参与了max dis的计算
-            results = torch_to_numpy(self.forward(whether_backward=True, lr=lr))
-            print("Before training, Train dis is %.4f, test dis is %.4f" %
-                  (results['train_dis'], results['test_dis']))
-
-            '''
+            print("L1 backward is not ready, please use mean method to backward")
+            exit()
             cluster_index = torch.gather(torch.from_numpy(
-                np.array(train_index,dtype=np.longlong)).to(self.device), 0, argmax.view(-1)).reshape((-1, 1))
-            index = torch.cat([cluster_index // 4, cluster_index % 4], dim=1).reshape((-1,2,1))
+                np.array(train_index, dtype=np.longlong)).to(self.device), 0, argmax.view(-1)).reshape((-1, 1))
+            index = torch.cat([cluster_index // 4, cluster_index % 4], dim=1).reshape((-1, 2, 1))
             # index is (label*feature)*2(represent 2 env taken by this pair)
+
             update_matrix = self.matrix.permute(1, 3, 0, 2).reshape((
-                    -1, self.envs_num,self.max_sample)).gather(dim=1, 
-                    index=index.expand(index.shape[0],index.shape[1],self.max_sample)).reshape((
-                        self.label_num,self.feature_num,2,self.max_sample
-                    ))
+                -1, self.envs_num, self.max_sample)).gather(dim=1,
+                                                            index=index.expand(index.shape[0], index.shape[1],
+                                                                               self.max_sample)).reshape((
+                self.label_num, self.feature_num, 2, self.max_sample
+            ))
+
             argmax = store_dis[train_index].reshape(
                 (-1, self.feature_num)).max(dim=0)[1].reshape((-1, 1))
             # TODO: add appropriate index
             index = torch.cat([argmax % self.label_num, ])
-            index = [(i, argmax[i] % self.label_num, [train_index[w]//4, train_index[w] % 4])
-                    for i, w in enumerate((argmax // self.label_num))]
+            index = [(i, argmax[i] % self.label_num, [train_index[w] // 4, train_index[w] % 4])
+                     for i, w in enumerate((argmax // self.label_num))]
             update_matrix = matrix.squeeze(-1).permute(3, 1, 0, 2)[index]
             print(update_matrix.shape)
-            '''
-
         elif backward_method == 'mean':
             mean_value = torch.mean(self.matrix @ self.params, dim=2) * (
                     self.max_sample / self.len_unsqueeze)
@@ -257,25 +230,9 @@ class opt_kde(torch.nn.Module):
             self.params -= lr * grad[0]
             self.normalize()
 
-    @torch.no_grad()
-    def pca(self):
-        mean_value = torch.mean(self.matrix @ self.params, dim=2) * (
-                self.max_sample / self.len_unsqueeze)
-        # mean_valuse is of shape (env,label,feature)
-        x = mean_value.unsqueeze(1)
-        y = mean_value.unsqueeze(0)
-        feat = (x-y).view(-1,self.feature_num)
-        feat1 = feat.unsqueeze(2)
-        feat2 = feat.unsqueeze(1)
-        mat = torch.mean(feat1*feat2,dim=0)
-        eig = torch.eig(mat,eigenvectors=True)
-        print('min eig of data:{}'.format(torch.min(eig[0]).item()))
-        lam = torch.diag(torch.sqrt(eig[0]))
-        self.params = lam*eig[1]
-
     def eig_val(self):  # return sorted eig value, to check whether degenerate
         eigs = torch.eig(self.params)
-        return np.sort(eigs[0].detach().cpu().numpy()[:, 0])
+        return np.sort(eignormalizes[0].detach().cpu().numpy()[:, 0])
 
 
 class opt_mmd(torch.nn.Module):
@@ -333,6 +290,7 @@ class opt_mmd(torch.nn.Module):
         Kyy = self.gaussian_kernel(y, y).mean()
         Kxy = self.gaussian_kernel(x, y).mean()
         return Kxx + Kyy - 2 * Kxy
+
 
     def forward(self):
         # Global MMD = \mean_{i,j} \sum_{g} \mean{env, env'}

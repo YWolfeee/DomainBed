@@ -27,6 +27,8 @@ def dummy_launcher(commands):
         print(f'Dummy launcher: {cmd}')
 
 def multi_gpu_launcher(commands):
+    def donothing():
+        pass
     """
     Launch commands on the local machine, using all GPUs in parallel.
     """

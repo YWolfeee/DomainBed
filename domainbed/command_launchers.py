@@ -10,6 +10,9 @@ import subprocess
 import time
 import torch
 
+def donothing():
+    pass
+
 def local_launcher(commands):
     """Launch commands serially on the local machine."""
     for cmd in commands:

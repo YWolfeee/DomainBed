@@ -38,7 +38,7 @@ def multi_gpu_launcher(commands):
 
     while len(commands) > 0:
         for gpu_idx in range(n_gpus):
-            proc = procs_by_gpu[gpu_idx]
+            proc = procs_by_gpu[gpu_idx] # stupid github
             if (proc is None) or (proc.poll() is not None):
                 # Nothing is running on this GPU; launch a command.
                 cmd = commands.pop(0)

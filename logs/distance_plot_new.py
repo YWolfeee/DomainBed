@@ -315,7 +315,6 @@ for marker in marker_lis:
                 for i in range(len(env_list)):
                     for j in range(i+1, len(env_list)):
                         envi, envj = env_list[i], env_list[j]
-
                         # 计算在label上环境envi,envj之间的distance
                         distance = distribution_distance(
                             data[label][envi][:, index], data[label][envj][:, index])

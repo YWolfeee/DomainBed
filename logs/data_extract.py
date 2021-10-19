@@ -2,6 +2,8 @@ import numpy as np
 import os
 from functools import cmp_to_key
 
+# 大概没用
+
 def find_first(x,y):
     if x == y:
         return 0
@@ -64,14 +66,6 @@ def compare(x, y):
             else:
                 break
         return number_compare(x[first_dis:x_last],y[first_dis:y_last])
-        if "*" in x and "*" not in y:
-            return - 1
-        elif "*" in y and "*" not in x:
-            return 1
-        elif "*" in x and "*" in y:
-            return x < y
-        else:
-            return 1 if (x < y) else -1
 
 
 def to_str(lis):

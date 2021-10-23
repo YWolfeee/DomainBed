@@ -162,24 +162,33 @@ if __name__ == "__main__":
     available_list = [_ for _ in range(max_gpu_num)]
     algorithm_dict = {}
     
-    # algorithm_dict['Mixup'] = {'times': 5, 'hparam': {'lr': [1e-4, 5e-5],
-    #                                                   'mixup_alpha': [0.1, 0.2]},
-    #                            'start_step': 0,'freq':2500}
-    # algorithm_dict['GroupDRO'] = {'times':5,'hparam':{'lr':[1e-4,5e-5],
-    #                                                   'groupdro_eta':[0.01,0.1]},
-    #                               'start_step':0,'freq':2500}
-    # algorithm_dict['IRM'] = {'times':5,
-    #                           'hparam':{'lr':[1e-4,5e-5],
-    #                                     'irm_penalty_anneal_iters':[1000],'irm_lambda':[1,10]},
-    #                            'start_step':1000,'freq':2500}
+    algorithm_dict['Mixup'] = {'times': 5, 'hparam': {'lr': [1e-4, 5e-5],
+                                                      'mixup_alpha': [0.1, 0.2]},
+                               'start_step': 0,'freq':2500}
+    algorithm_dict['GroupDRO'] = {'times':5,'hparam':{'lr':[1e-4,5e-5],
+                                                      'groupdro_eta':[0.01,0.1]},
+                                  'start_step':0,'freq':2500}
+    algorithm_dict['IRM'] = {'times':5,
+                              'hparam':{'lr':[1e-4,5e-5],
+                                        'irm_penalty_anneal_iters':[1000],'irm_lambda':[1,10]},
+                               'start_step':1000,'freq':2500}
 
-    # algorithm_dict['CORAL'] = {'times':5,
-    #                            'hparam':{'lr':[1e-4,5e-5],
-    #                                      'mmd_gamma':[0.01,0.1,1]},
-    #                            'start_step':0,'freq':2500}
-    
+    algorithm_dict['CORAL'] = {'times':5,
+                               'hparam':{'lr':[1e-4,5e-5],
+                                         'mmd_gamma':[0.01,0.1,1]},
+                               'start_step':0,'freq':2500}
+
     algorithm_dict['ERM'] = {'times': 1, 'hparam': {'lr': [1e-4,5e-5]},
                                                         'start_step':0,'freq':2500}
+
+
+    # used for debug 
+    # algorithm_dict['CORAL'] = {'times':1,
+    #                            'hparam':{'lr':[5e-5],
+    #                                      'mmd_gamma':[0.01,0.1]},
+    #                            'start_step':0,'freq':2500}
+    # algorithm_dict['ERM'] = {'times': 1, 'hparam': {'lr': [1e-4,5e-5]},
+    #                                                     'start_step':0,'freq':2500}
 
     if args.train_algorithm:
         algorithm_dict_tmp = {}
@@ -189,13 +198,13 @@ if __name__ == "__main__":
         algorithm_dict = algorithm_dict_tmp
 
     args_list = []
-    # dataset_list = ['OfficeHome','VLCS','PACS']
-    dataset_list = ['VLCS']
+    dataset_list = ['OfficeHome','VLCS','PACS']
+    # dataset_list = ['VLCS']
     for data_set in dataset_list:
         if data_set == 'OfficeHome':
             test_env_list = [0,1,2,3]
         elif data_set == 'VLCS':
-            test_env_list = [0]
+            test_env_list = [0,1,2,3]
         elif data_set == 'PACS':
             test_env_list = [0,1,2,3]
         elif data_set == 'ColoredMNIST':

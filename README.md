@@ -1,4 +1,4 @@
-This is the implementation of [Towards a Theoretical Framework of Out-of-Distribution Generalization](https://arxiv.org/abs/2106.04496). Our code is inherted from [DomainBed](https://github.com/facebookresearch/DomainBed).
+This is the implementation of [Towards a Theoretical Framework of Out-of-Distribution Generalization](https://arxiv.org/abs/2106.04496). Our code is inherited from [DomainBed](https://github.com/facebookresearch/DomainBed).
 
 # Dataset
 
@@ -10,7 +10,7 @@ The structure of dataset should be same as [DomainBed](https://github.com/facebo
 
 # Single Experiment
 
-to run a single experiment, run the following command:
+To run a single experiment, run the following command:
 ```
 python -m main --data_dir domainbed/datasets \
 --trial_seed 89500 --algorithm ERM --dataset VLCS --test_envs 1 \
@@ -25,16 +25,17 @@ python -m main --data_dir domainbed/datasets \
 The final result will be saved in `logs/ERM_VLCS_test_env1/ERM_exp1`
 
 # Model Selection
-To reproduce our experiment, one can run
+
+To reproduce our experiment, one can run the following code to generate different models for model selection
 ```
 python my_launcher.py --command_launcher my_multi_gpu launch
 ```
-to generate different models for model selection. After model generation, one should use the following codes
+
+After model generation, one should use the following codes to collect feature and metric from different models. The result will be record in `renamed/*.csv`
 ```
 cd logs
 python collect_feature.py
 ```
-to collect feature and metric from different models. The result will be record in `renamed/*.csv`
 
 to use our model selection criterion, one can run
 ```

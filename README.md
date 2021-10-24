@@ -6,7 +6,7 @@ Downloads VLCS dataset and link it to
 ```
 /dataset/VLCS
 ```
-The structure of dataset should be same as [DomainBed](https://github.com/facebookresearch/DomainBed). To run our full experiments, you should also download PACS and OfficeHome dataset in the same way.
+The structure of dataset should be same as [DomainBed](https://github.com/facebookresearch/DomainBed). To run our full experiments, one should also download PACS and OfficeHome dataset in the same way.
 
 # Single Experiment
 

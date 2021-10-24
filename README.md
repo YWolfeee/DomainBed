@@ -4,7 +4,7 @@ This is the implementation of [Towards a Theoretical Framework of Out-of-Distrib
 
 Downloads VLCS dataset and link it to 
 ```
-/dataset/VLCS
+/datasets/VLCS
 ```
 The structure of dataset should be same as [DomainBed](https://github.com/facebookresearch/DomainBed). To run our full experiments, one should also download PACS and OfficeHome dataset in the same way.
 

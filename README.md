@@ -40,4 +40,4 @@ to use our model selection criterion, one can run
 ```
 python model_selection.py
 ```
-This command use the result in `.csv` file to select model according to different criterion and report their test evironment accuracy. `train_acc` means the selection criterion is the average training accuracy, `train_mix` is the selection criterion defined in our [paper](https://arxiv.org/abs/2106.04496)
+This command use the result in `renamed/*.csv` file to select model according to different criterion and report their test evironment accuracy. `train_acc` means the selection criterion is the average training accuracy, `train_mix` is the selection criterion defined in our [paper](https://arxiv.org/abs/2106.04496)
